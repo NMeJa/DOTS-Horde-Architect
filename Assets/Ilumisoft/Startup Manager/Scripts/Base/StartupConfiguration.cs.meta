@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: c09c29e22dfd3644da4db9c4a22cb465
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 232008
+  packageName: Startup Manager 2 - Plug & Play Persistent Game Systems
+  packageVersion: 2.0
+  assetPath: Assets/Ilumisoft/Startup Manager/Scripts/Base/StartupConfiguration.cs
+  uploadId: 752294

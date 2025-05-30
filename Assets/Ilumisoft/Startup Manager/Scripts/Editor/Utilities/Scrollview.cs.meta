@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: f6207506288c77646a60140157b39c15
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 232008
+  packageName: Startup Manager 2 - Plug & Play Persistent Game Systems
+  packageVersion: 2.0
+  assetPath: Assets/Ilumisoft/Startup Manager/Scripts/Editor/Utilities/Scrollview.cs
+  uploadId: 752294
