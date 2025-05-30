@@ -78,7 +78,7 @@ jobs:
       matrix:
         # Uncomment the platforms you want to build for
         targetPlatform:
-          - StandaloneWindows64 # Windows 64-bit
+        #   - StandaloneWindows64 # Windows 64-bit
           # - StandaloneOSX # macOS
           # - StandaloneLinux64 # Linux 64-bit
           - WebGL # Web browser
@@ -109,7 +109,7 @@ jobs:
         with:
           targetPlatform: ${{ matrix.targetPlatform }}
           
-      # Upload build artifacts - Updated to v4
+      # Upload build artifacts
       - uses: actions/upload-artifact@v4
         with:
           name: Build-${{ matrix.targetPlatform }}
@@ -122,37 +122,26 @@ jobs:
     needs: build
     if: success() && (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event.inputs.deployToPages == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # This is needed for github pages deployment
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
       - name: Download WebGL Build
         uses: actions/download-artifact@v4
         with:
           name: Build-WebGL
-          path: build/WebGL
+          path: dist  # Changed to dist directory
           
+      # Setup Pages
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+        
+      # Deploy to GitHub Pages
       - name: Deploy to GitHub Pages
-        uses: JamesIves/github-pages-deploy-action@v4
+        uses: peaceiris/actions-gh-pages@v3
         with:
-          folder: build/WebGL
-          clean: true
-       
-  # Example: Deploy Windows build to itch.io (optional)
-  deploy-windows:
-    name: Deploy Windows build to itch.io
-    needs: build
-    if: false # Disabled by default - enable when needed
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download Windows Build
-        uses: actions/download-artifact@v3
-        with:
-          name: Build-StandaloneWindows64
-          path: build/StandaloneWindows64
-          
-      - name: Deploy to itch.io
-        uses: manleydev/butler-publish-itchio-action@master
-        env:
-          BUTLER_CREDENTIALS: ${{ secrets.BUTLER_API_KEY }}
-          CHANNEL: windows
-          ITCH_GAME: your-game-name
-          ITCH_USER: your-itch-username
-          PACKAGE: build/StandaloneWindows64
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dist
+          force_orphan: true  # Creates a new history for the gh-pages branch
