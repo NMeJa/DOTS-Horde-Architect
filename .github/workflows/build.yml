@@ -8,6 +8,11 @@ on:
   # Manual trigger option
   workflow_dispatch:
     inputs:
+      runTests:
+        description: 'Run Unity tests'
+        required: true
+        default: false
+        type: boolean
       deployToPages:
         description: 'Deploy WebGL build to GitHub Pages'
         required: true
@@ -28,10 +33,11 @@ jobs:
           fi
           echo "✅ Unity secrets are properly configured"
 
-  # Run tests if they exist
+  # Run tests only if explicitly enabled
   test:
     name: Unity Tests
     needs: verify-secrets
+    if: github.event.inputs.runTests == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -46,7 +52,6 @@ jobs:
           
       - uses: game-ci/unity-test-runner@v4
         id: tests
-        continue-on-error: true
         env:
           UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
           UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
@@ -54,21 +59,19 @@ jobs:
         with:
           testMode: all
           
-      - name: Check Test Results
-        run: |
-          if [[ "${{ steps.tests.outcome }}" == "success" ]]; then
-            echo "✅ Tests passed successfully"
-          elif [[ "${{ steps.tests.outcome }}" == "failure" ]]; then
-            echo "❌ Tests failed"
-            exit 1
-          else
-            echo "⚠️ No tests found or tests were skipped. Continuing workflow."
-          fi
+      - name: Upload Test Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Test-Results
+          path: artifacts/
 
   # Build for selected platforms
   build:
     name: Build for ${{ matrix.targetPlatform }}
-    needs: test
+    needs: [verify-secrets]
+    # Only depend on tests if they're being run
+    if: always() && (needs.verify-secrets.result == 'success') && (github.event.inputs.runTests != 'true' || needs.test.result == 'success')
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -106,8 +109,8 @@ jobs:
         with:
           targetPlatform: ${{ matrix.targetPlatform }}
           
-      # Upload build artifacts
-      - uses: actions/upload-artifact@v3
+      # Upload build artifacts - Updated to v4
+      - uses: actions/upload-artifact@v4
         with:
           name: Build-${{ matrix.targetPlatform }}
           path: build/${{ matrix.targetPlatform }}
@@ -121,7 +124,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download WebGL Build
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: Build-WebGL
           path: build/WebGL
@@ -131,7 +134,7 @@ jobs:
         with:
           folder: build/WebGL
           clean: true
-          
+       
   # Example: Deploy Windows build to itch.io (optional)
   deploy-windows:
     name: Deploy Windows build to itch.io

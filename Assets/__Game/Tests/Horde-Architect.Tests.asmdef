@@ -1,0 +1,16 @@
+{
+    "name": "Horde-Architect.Tests",
+    "rootNamespace": "HordeArchitect.Tests",
+    "references": [
+        "GUID:67b911a514d967149a125e04aca0e5bd"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
