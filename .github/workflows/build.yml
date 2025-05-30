@@ -1,106 +1,34 @@
-name: Unity Build and Deploy
+name: Build project
 
-on:
-  push:
-    branches: [ main, develop ]
-  pull_request:
-    branches: [ main ]
-  # Manual trigger option
-  workflow_dispatch:
-    inputs:
-      runTests:
-        description: 'Run Unity tests'
-        required: true
-        default: false
-        type: boolean
-      deployToPages:
-        description: 'Deploy WebGL build to GitHub Pages'
-        required: true
-        default: true
-        type: boolean
+on: [push, pull_request]
 
 jobs:
-  # Check if required secrets are set
-  verify-secrets:
-    name: Verify Unity Secrets
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check for Unity license
-        run: |
-          if [[ -z "${{ secrets.UNITY_LICENSE }}" && -z "${{ secrets.UNITY_EMAIL }}" && -z "${{ secrets.UNITY_PASSWORD }}" ]]; then
-            echo "::error::Unity license secrets are not set. Please set UNITY_LICENSE or both UNITY_EMAIL and UNITY_PASSWORD."
-            exit 1
-          fi
-          echo "✅ Unity secrets are properly configured"
-
-  # Run tests only if explicitly enabled
-  test:
-    name: Unity Tests
-    needs: verify-secrets
-    if: github.event.inputs.runTests == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          lfs: true
-          
-      - uses: actions/cache@v3
-        with:
-          path: Library
-          key: Library-test
-          restore-keys: Library-
-          
-      - uses: game-ci/unity-test-runner@v4
-        id: tests
-        env:
-          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
-          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
-          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
-        with:
-          testMode: all
-          
-      - name: Upload Test Results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: Test-Results
-          path: artifacts/
-
-  # Build for selected platforms
-  build:
+  buildForAllSupportedPlatforms:
     name: Build for ${{ matrix.targetPlatform }}
-    needs: [verify-secrets]
-    # Only depend on tests if they're being run
-    if: always() && (needs.verify-secrets.result == 'success') && (github.event.inputs.runTests != 'true' || needs.test.result == 'success')
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        # Uncomment the platforms you want to build for
         targetPlatform:
-        #   - StandaloneWindows64 # Windows 64-bit
-          # - StandaloneOSX # macOS
-          # - StandaloneLinux64 # Linux 64-bit
-          - WebGL # Web browser
-          # - Android # Android devices
-          # - iOS # iOS devices
+        #   - StandaloneOSX # Build a macOS standalone (Intel 64-bit).
+        #   - StandaloneWindows # Build a Windows standalone.
+        #   - StandaloneWindows64 # Build a Windows 64-bit standalone.
+        #   - StandaloneLinux64 # Build a Linux 64-bit standalone.
+        #   - iOS # Build an iOS player.
+        #   - Android # Build an Android .apk standalone app.
+          - WebGL # WebGL.
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           lfs: true
-          
       - uses: actions/cache@v3
         with:
           path: Library
           key: Library-${{ matrix.targetPlatform }}
           restore-keys: Library-
-          
-      # Free disk space for Android builds
       - if: matrix.targetPlatform == 'Android'
         uses: jlumbroso/free-disk-space@v1.3.1
-        
-      # Build Unity project
       - uses: game-ci/unity-builder@v4
         env:
           UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
@@ -108,40 +36,7 @@ jobs:
           UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
         with:
           targetPlatform: ${{ matrix.targetPlatform }}
-          
-      # Upload build artifacts
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v3
         with:
           name: Build-${{ matrix.targetPlatform }}
           path: build/${{ matrix.targetPlatform }}
-          retention-days: 14
-
-  # Deploy WebGL build to GitHub Pages
-  deploy-webgl:
-    name: Deploy WebGL to GitHub Pages
-    needs: build
-    if: success() && (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event.inputs.deployToPages == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write  # This is needed for github pages deployment
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        
-      - name: Download WebGL Build
-        uses: actions/download-artifact@v4
-        with:
-          name: Build-WebGL
-          path: dist  # Changed to dist directory
-          
-      # Setup Pages
-      - name: Setup Pages
-        uses: actions/configure-pages@v4
-        
-      # Deploy to GitHub Pages
-      - name: Deploy to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v3
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./dist
-          force_orphan: true  # Creates a new history for the gh-pages branch
