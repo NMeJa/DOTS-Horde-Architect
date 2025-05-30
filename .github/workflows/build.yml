@@ -1,0 +1,155 @@
+name: Unity Build and Deploy
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  # Manual trigger option
+  workflow_dispatch:
+    inputs:
+      deployToPages:
+        description: 'Deploy WebGL build to GitHub Pages'
+        required: true
+        default: true
+        type: boolean
+
+jobs:
+  # Check if required secrets are set
+  verify-secrets:
+    name: Verify Unity Secrets
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for Unity license
+        run: |
+          if [[ -z "${{ secrets.UNITY_LICENSE }}" && -z "${{ secrets.UNITY_EMAIL }}" && -z "${{ secrets.UNITY_PASSWORD }}" ]]; then
+            echo "::error::Unity license secrets are not set. Please set UNITY_LICENSE or both UNITY_EMAIL and UNITY_PASSWORD."
+            exit 1
+          fi
+          echo "✅ Unity secrets are properly configured"
+
+  # Run tests if they exist
+  test:
+    name: Unity Tests
+    needs: verify-secrets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+          
+      - uses: actions/cache@v3
+        with:
+          path: Library
+          key: Library-test
+          restore-keys: Library-
+          
+      - uses: game-ci/unity-test-runner@v4
+        id: tests
+        continue-on-error: true
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+        with:
+          testMode: all
+          
+      - name: Check Test Results
+        run: |
+          if [[ "${{ steps.tests.outcome }}" == "success" ]]; then
+            echo "✅ Tests passed successfully"
+          elif [[ "${{ steps.tests.outcome }}" == "failure" ]]; then
+            echo "❌ Tests failed"
+            exit 1
+          else
+            echo "⚠️ No tests found or tests were skipped. Continuing workflow."
+          fi
+
+  # Build for selected platforms
+  build:
+    name: Build for ${{ matrix.targetPlatform }}
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Uncomment the platforms you want to build for
+        targetPlatform:
+          - StandaloneWindows64 # Windows 64-bit
+          # - StandaloneOSX # macOS
+          # - StandaloneLinux64 # Linux 64-bit
+          - WebGL # Web browser
+          # - Android # Android devices
+          # - iOS # iOS devices
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          lfs: true
+          
+      - uses: actions/cache@v3
+        with:
+          path: Library
+          key: Library-${{ matrix.targetPlatform }}
+          restore-keys: Library-
+          
+      # Free disk space for Android builds
+      - if: matrix.targetPlatform == 'Android'
+        uses: jlumbroso/free-disk-space@v1.3.1
+        
+      # Build Unity project
+      - uses: game-ci/unity-builder@v4
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+        with:
+          targetPlatform: ${{ matrix.targetPlatform }}
+          
+      # Upload build artifacts
+      - uses: actions/upload-artifact@v3
+        with:
+          name: Build-${{ matrix.targetPlatform }}
+          path: build/${{ matrix.targetPlatform }}
+          retention-days: 14
+
+  # Deploy WebGL build to GitHub Pages
+  deploy-webgl:
+    name: Deploy WebGL to GitHub Pages
+    needs: build
+    if: success() && (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event.inputs.deployToPages == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download WebGL Build
+        uses: actions/download-artifact@v3
+        with:
+          name: Build-WebGL
+          path: build/WebGL
+          
+      - name: Deploy to GitHub Pages
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          folder: build/WebGL
+          clean: true
+          
+  # Example: Deploy Windows build to itch.io (optional)
+  deploy-windows:
+    name: Deploy Windows build to itch.io
+    needs: build
+    if: false # Disabled by default - enable when needed
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Windows Build
+        uses: actions/download-artifact@v3
+        with:
+          name: Build-StandaloneWindows64
+          path: build/StandaloneWindows64
+          
+      - name: Deploy to itch.io
+        uses: manleydev/butler-publish-itchio-action@master
+        env:
+          BUTLER_CREDENTIALS: ${{ secrets.BUTLER_API_KEY }}
+          CHANNEL: windows
+          ITCH_GAME: your-game-name
+          ITCH_USER: your-itch-username
+          PACKAGE: build/StandaloneWindows64
