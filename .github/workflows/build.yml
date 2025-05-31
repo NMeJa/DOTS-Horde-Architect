@@ -17,7 +17,7 @@ on:
       buildWindows:
         description: 'Build Windows version'
         required: true
-        default: true
+        default: false
         type: boolean
       deployWindows:
         description: 'Deploy Windows version to release'
@@ -41,6 +41,9 @@ jobs:
   verify-secrets:
     name: Verify Unity Secrets
     runs-on: ubuntu-latest
+    outputs:
+      buildWindows: ${{ steps.set-build-flags.outputs.buildWindows }}
+      buildWebGL: ${{ steps.set-build-flags.outputs.buildWebGL }}
     steps:
       - name: Check for Unity license
         run: |
@@ -49,6 +52,22 @@ jobs:
             exit 1
           fi
           echo "✅ Unity secrets are properly configured"
+
+      - name: Set build flags
+        id: set-build-flags
+        run: |
+          # Default values if not manually triggered
+          BUILD_WINDOWS="true"
+          BUILD_WEBGL="true"
+          
+          # If workflow dispatch, use the provided inputs
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            BUILD_WINDOWS="${{ github.event.inputs.buildWindows }}"
+            BUILD_WEBGL="${{ github.event.inputs.buildWebGL }}"
+          fi
+          
+          echo "buildWindows=$BUILD_WINDOWS" >> $GITHUB_OUTPUT
+          echo "buildWebGL=$BUILD_WEBGL" >> $GITHUB_OUTPUT
 
   # Run tests only if explicitly enabled
   test:
@@ -61,11 +80,22 @@ jobs:
         with:
           lfs: true
 
+      - name: Free Disk Space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
       - uses: actions/cache@v3
         with:
-          path: Library
-          key: Library-test
-          restore-keys: Library-
+          path: Library/Bee
+          key: Library-test-minimal
+          restore-keys: Library-test-minimal
 
       - uses: game-ci/unity-test-runner@v4
         id: tests
@@ -75,10 +105,11 @@ jobs:
           UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
         with:
           testMode: all
+          customParameters: '-nographics -batchmode -disable-gpu'
 
       - name: Upload Test Results
         if: always()
-        uses: actions/upload-artifact@v4  # Explicitly v4
+        uses: actions/upload-artifact@v4
         with:
           name: Test-Results
           path: artifacts/
@@ -86,9 +117,9 @@ jobs:
   # Build for Windows
   build-windows:
     name: Build Windows
-    needs: [ verify-secrets ]
+    needs: [ verify-secrets, test ]
     # Only run if Windows build is enabled and tests pass (if tests are running)
-    if: (github.event.inputs.buildWindows == null || github.event.inputs.buildWindows == 'true') && (github.event.inputs.runTests != 'true' || needs.test.result == 'success')
+    if: needs.verify-secrets.outputs.buildWindows == 'true' && (github.event.inputs.runTests != 'true' || needs.test.result == 'success')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
@@ -97,12 +128,28 @@ jobs:
           fetch-depth: 0
           lfs: true
 
+      - name: Free Disk Space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      - name: Check Available Disk Space
+        run: |
+          echo "Available disk space:"
+          df -h
+
       - name: Cache Library folder
         uses: actions/cache@v3
         with:
-          path: Library
-          key: Library-Windows
-          restore-keys: Library-
+          path: Library/Bee
+          key: Library-Windows-minimal
+          restore-keys: Library-Windows-minimal
 
       - name: Build Windows
         uses: game-ci/unity-builder@v4
@@ -112,20 +159,69 @@ jobs:
           UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
         with:
           targetPlatform: StandaloneWindows64
+          customParameters: '-nographics -batchmode -disable-gpu'
 
       - name: Upload Windows Build
-        uses: actions/upload-artifact@v4  # Explicitly v4
+        uses: actions/upload-artifact@v4
         with:
           name: Build-Windows
           path: build/StandaloneWindows64
           retention-days: 3
 
-  # Build for WebGL
+      - name: Clean up after build
+        run: |
+          rm -rf Library/PackageCache || true
+          rm -rf Library/Artifacts || true
+          rm -rf Library/BuildCache || true
+
+  # Deploy Windows build to a release
+  deploy-windows:
+    name: Deploy Windows to Release
+    needs: build-windows
+    if: >-
+      success() && 
+      (
+        (github.event_name == 'push' && github.ref == 'refs/heads/main') || 
+        (github.event_name == 'workflow_dispatch' && github.event.inputs.deployWindows == 'true')
+      )
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Download Windows Build
+        uses: actions/download-artifact@v4
+        with:
+          name: Build-Windows
+          path: windows-build
+
+      - name: Zip Windows Build
+        run: |
+          cd windows-build
+          zip -r ../DOTS-Horde-Architect-Windows.zip .
+
+      - name: Create Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: DOTS-Horde-Architect-Windows.zip
+          name: Release ${{ github.run_number }} - Windows
+          tag_name: v0.1.${{ github.run_number }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+
+  # Build for WebGL - AFTER Windows build completes
   build-webgl:
     name: Build WebGL
-    needs: [ verify-secrets ]
-    # Only run if WebGL build is enabled and tests pass (if tests are running)
-    if: (github.event.inputs.buildWebGL == null || github.event.inputs.buildWebGL == 'true') && (github.event.inputs.runTests != 'true' || needs.test.result == 'success')
+    needs: [verify-secrets, test, build-windows]
+    # Only run if WebGL build is enabled, tests pass (if running), and Windows build completes or is skipped
+    if: >-
+      needs.verify-secrets.outputs.buildWebGL == 'true' && 
+      (github.event.inputs.runTests != 'true' || needs.test.result == 'success') &&
+      (needs.build-windows.result == 'success' || needs.build-windows.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
@@ -134,12 +230,30 @@ jobs:
           fetch-depth: 0
           lfs: true
 
+      # Free up disk space
+      - name: Free Disk Space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      # Display available disk space after cleanup
+      - name: Check Available Disk Space
+        run: |
+          echo "Available disk space:"
+          df -h
+
       - name: Cache Library folder
         uses: actions/cache@v3
         with:
-          path: Library
-          key: Library-WebGL
-          restore-keys: Library-
+          path: Library/Bee
+          key: Library-WebGL-minimal
+          restore-keys: Library-WebGL-minimal
 
       - name: Build WebGL
         uses: game-ci/unity-builder@v4
@@ -149,47 +263,14 @@ jobs:
           UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
         with:
           targetPlatform: WebGL
+          customParameters: '-nographics -batchmode -disable-gpu'
 
       - name: Upload WebGL Build
-        uses: actions/upload-artifact@v4  # Explicitly v4
+        uses: actions/upload-artifact@v4
         with:
           name: Build-WebGL
           path: build/WebGL
           retention-days: 3
-
-  # Deploy Windows build to a release
-#  deploy-windows:
-#    name: Deploy Windows to Release
-#    needs: build-windows
-#    if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
-#    runs-on: ubuntu-latest
-#    permissions:
-#      contents: write
-#    steps:
-#      - name: Checkout Repository
-#        uses: actions/checkout@v4
-#
-#      - name: Download Windows Build
-#        uses: actions/download-artifact@v4  # Explicitly v4
-#        with:
-#          name: Build-Windows
-#          path: windows-build
-#
-#      - name: Zip Windows Build
-#        run: |
-#          cd windows-build
-#          zip -r ../DOTS-Horde-Architect-Windows.zip .
-#
-#      - name: Create Release
-#        id: create_release
-#        uses: softprops/action-gh-release@v1
-#        with:
-#          files: DOTS-Horde-Architect-Windows.zip
-#          name: Release ${{ github.run_number }} - Windows
-#          tag_name: v0.1.${{ github.run_number }}
-#          draft: false
-#          prerelease: false
-#          generate_release_notes: true
 
   # Deploy WebGL build to GitHub Pages
   deploy-webgl:
