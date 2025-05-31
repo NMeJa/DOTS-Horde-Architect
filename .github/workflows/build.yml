@@ -1,85 +1,32 @@
-name: Unity Build and Deploy
+name: Build project
 
-on:
-  push:
-    branches: [ main, develop ]
-  pull_request:
-    branches: [ main ]
-  # Manual trigger option
-  workflow_dispatch:
-    inputs:
-      buildWindows:
-        description: 'Build Windows version'
-        required: true
-        default: true
-        type: boolean
-      deployWindows:
-        description: 'Deploy Windows version to release'
-        required: true
-        default: false
-        type: boolean
-
-      buildWebGL:
-        description: 'Build WebGL version'
-        required: true
-        default: true
-        type: boolean
-      deployWebGL:
-        description: 'Deploy WebGL version to GitHub Pages'
-        required: true
-        default: false
-        type: boolean
+on: [push, pull_request]
 
 jobs:
-  # Check if required secrets are set
-  verify-secrets:
-    name: Verify Unity Secrets
+  buildForAllSupportedPlatforms:
+    name: Build for ${{ matrix.targetPlatform }}
     runs-on: ubuntu-latest
-    outputs:
-      buildWindows: ${{ steps.set-build-flags.outputs.buildWindows }}
-      buildWebGL: ${{ steps.set-build-flags.outputs.buildWebGL }}
+    strategy:
+      fail-fast: false
+      matrix:
+        targetPlatform:
+          - StandaloneWindows64 # Build a Windows 64-bit standalone.
+          - WebGL # WebGL.
+          # Commented out other platforms to reduce build time - uncomment as needed
+          # - StandaloneOSX # Build a macOS standalone (Intel 64-bit).
+          # - StandaloneWindows # Build a Windows standalone.
+          # - StandaloneLinux64 # Build a Linux 64-bit standalone.
+          # - iOS # Build an iOS player.
+          # - Android # Build an Android .apk standalone app.
     steps:
-      - name: Check for Unity license
-        run: |
-          if [[ -z "${{ secrets.UNITY_LICENSE }}" && -z "${{ secrets.UNITY_EMAIL }}" && -z "${{ secrets.UNITY_PASSWORD }}" ]]; then
-            echo "::error::Unity license secrets are not set. Please set UNITY_LICENSE or both UNITY_EMAIL and UNITY_PASSWORD."
-            exit 1
-          fi
-          echo "✅ Unity secrets are properly configured"
-
-      - name: Set build flags
-        id: set-build-flags
-        run: |
-          # Default values if not manually triggered
-          BUILD_WINDOWS="true"
-          BUILD_WEBGL="true"
-          
-          # If workflow dispatch, use the provided inputs
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            BUILD_WINDOWS="${{ github.event.inputs.buildWindows }}"
-            BUILD_WEBGL="${{ github.event.inputs.buildWebGL }}"
-          fi
-          
-          echo "buildWindows=$BUILD_WINDOWS" >> $GITHUB_OUTPUT
-          echo "buildWebGL=$BUILD_WEBGL" >> $GITHUB_OUTPUT
-
-  # Build for WebGL - RUNS FIRST
-  build-webgl:
-    name: Build WebGL
-    needs: [verify-secrets]
-    # Only run if WebGL build is enabled
-    if: needs.verify-secrets.outputs.buildWebGL == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           lfs: true
 
-      # Free up disk space
+      # Free disk space on all platforms
       - name: Free Disk Space
-        uses: jlumbroso/free-disk-space@main
+        uses: jlumbroso/free-disk-space@v1.3.1
         with:
           tool-cache: true
           android: true
@@ -89,54 +36,33 @@ jobs:
           docker-images: true
           swap-storage: true
 
-      # Display available disk space after cleanup
-      - name: Check Available Disk Space
-        run: |
-          echo "Available disk space:"
-          df -h
-
-      - name: Cache Library folder
-        uses: actions/cache@v3
+      - uses: actions/cache@v3
         with:
           path: Library/Bee
-          key: Library-WebGL-minimal
-          restore-keys: Library-WebGL-minimal
+          key: Library-${{ matrix.targetPlatform }}-minimal
+          restore-keys: Library-${{ matrix.targetPlatform }}-minimal
 
-      - name: Build WebGL
-        uses: game-ci/unity-builder@v4
+      - uses: game-ci/unity-builder@v4
         env:
           UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
           UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
           UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
         with:
-          targetPlatform: WebGL
+          targetPlatform: ${{ matrix.targetPlatform }}
           customParameters: '-nographics -disable-gpu'
 
-      - name: Upload WebGL Build
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: Build-WebGL
-          path: build/WebGL
+          name: Build-${{ matrix.targetPlatform }}
+          path: build/${{ matrix.targetPlatform }}
           retention-days: 3
 
-      - name: Clean up after build
-        run: |
-          rm -rf Library/PackageCache || true
-          rm -rf Library/Artifacts || true
-          rm -rf Library/BuildCache || true
-
-  # Deploy WebGL build to GitHub Pages
-  deploy-webgl:
+  deployToGitHubPages:
     name: Deploy WebGL to GitHub Pages
-    needs: build-webgl
-    # Modified condition to include workflow_dispatch with deployWebGL input
-    if: >-
-      success() && 
-      (
-        (github.event_name == 'push' && github.ref == 'refs/heads/main') || 
-        (github.event_name == 'workflow_dispatch' && github.event.inputs.deployWebGL == 'true')
-      )
     runs-on: ubuntu-latest
+    needs: buildForAllSupportedPlatforms
+    # Only run on pushes to main or manual workflow runs
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
       contents: write
       pages: write
@@ -159,13 +85,12 @@ jobs:
         run: |
           if [ ! -f webgl-build/index.html ]; then
             echo "Creating a redirect index.html file"
-            # Find the actual HTML file (usually index.html in a subfolder)
             MAIN_HTML=$(find webgl-build -name "*.html" | head -n 1)
             if [ -n "$MAIN_HTML" ]; then
               MAIN_HTML_RELATIVE=$(echo $MAIN_HTML | sed 's|webgl-build/||')
               echo "<meta http-equiv=\"refresh\" content=\"0; url=./${MAIN_HTML_RELATIVE}\">" > webgl-build/index.html
             else
-              echo "<h1>DOTS-Horde-Architect</h1><p>WebGL build coming soon.</p>" > webgl-build/index.html
+              echo "<h1>Unity WebGL Build</h1><p>WebGL build coming soon.</p>" > webgl-build/index.html
             fi
           fi
 
@@ -183,98 +108,3 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v2
-
-  # Build for Windows AFTER WebGL build completes
-  build-windows:
-    name: Build Windows
-    needs: [verify-secrets, build-webgl]
-    # Only run if Windows build is enabled and WebGL build completes or is skipped
-    if: >-
-      needs.verify-secrets.outputs.buildWindows == 'true' && 
-      (needs.build-webgl.result == 'success' || needs.build-webgl.result == 'skipped')
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          lfs: true
-
-      - name: Free Disk Space
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: true
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
-
-      - name: Check Available Disk Space
-        run: |
-          echo "Available disk space:"
-          df -h
-
-      - name: Cache Library folder
-        uses: actions/cache@v3
-        with:
-          path: Library/Bee
-          key: Library-Windows-minimal
-          restore-keys: Library-Windows-minimal
-
-      - name: Build Windows
-        uses: game-ci/unity-builder@v4
-        env:
-          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
-          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
-          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
-        with:
-          targetPlatform: StandaloneWindows64
-          customParameters: '-nographics -disable-gpu'
-
-      - name: Upload Windows Build
-        uses: actions/upload-artifact@v4
-        with:
-          name: Build-Windows
-          path: build/StandaloneWindows64
-          retention-days: 3
-
-  # Deploy Windows build to a release
-  deploy-windows:
-    name: Deploy Windows to Release
-    needs: build-windows
-    if: >-
-      success() && 
-      (
-        (github.event_name == 'push' && github.ref == 'refs/heads/main') || 
-        (github.event_name == 'workflow_dispatch' && github.event.inputs.deployWindows == 'true')
-      )
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Download Windows Build
-        uses: actions/download-artifact@v4
-        with:
-          name: Build-Windows
-          path: windows-build
-
-      - name: Zip Windows Build
-        run: |
-          cd windows-build
-          zip -r ../DOTS-Horde-Architect-Windows.zip .
-
-      - name: Create Release
-        id: create_release
-        uses: softprops/action-gh-release@v1
-        with:
-          files: DOTS-Horde-Architect-Windows.zip
-          name: Release ${{ github.run_number }} - Windows
-          tag_name: v0.1.${{ github.run_number }}
-          draft: false
-          prerelease: false
-          generate_release_notes: true
