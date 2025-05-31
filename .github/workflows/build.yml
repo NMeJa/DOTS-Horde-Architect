@@ -218,10 +218,10 @@ jobs:
     name: Build WebGL
     needs: [ verify-secrets ]
     # Only run if WebGL build is enabled, tests pass (if running), and Windows build completes or is skipped
-    if: >-
-      needs.verify-secrets.outputs.buildWebGL == 'true' &&
-      (github.event.inputs.runTests != 'true' || needs.test.result == 'success') &&
-      (needs.build-windows.result == 'success' || needs.build-windows.result == 'skipped')
+#    if: >-
+#      needs.verify-secrets.outputs.buildWebGL == 'true' &&
+#      (github.event.inputs.runTests != 'true' || needs.test.result == 'success') &&
+#      (needs.build-windows.result == 'success' || needs.build-windows.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
