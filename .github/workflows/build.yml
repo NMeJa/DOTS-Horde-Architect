@@ -1,42 +1,251 @@
-name: Build project
+name: Unity Build and Deploy
 
-on: [push, pull_request]
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  # Manual trigger option
+  workflow_dispatch:
+    inputs:
+      runTests:
+        description: 'Run Unity tests'
+        required: true
+        default: false
+        type: boolean
+
+      buildWindows:
+        description: 'Build Windows version'
+        required: true
+        default: true
+        type: boolean
+      deployWindows:
+        description: 'Deploy Windows version to release'
+        required: true
+        default: false
+        type: boolean
+
+      buildWebGL:
+        description: 'Build WebGL version'
+        required: true
+        default: true
+        type: boolean
+      deployWebGL:
+        description: 'Deploy WebGL version to GitHub Pages'
+        required: true
+        default: false
+        type: boolean
 
 jobs:
-  buildForAllSupportedPlatforms:
-    name: Build for ${{ matrix.targetPlatform }}
+  # Check if required secrets are set
+  verify-secrets:
+    name: Verify Unity Secrets
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        targetPlatform:
-        #   - StandaloneOSX # Build a macOS standalone (Intel 64-bit).
-        #   - StandaloneWindows # Build a Windows standalone.
-        #   - StandaloneWindows64 # Build a Windows 64-bit standalone.
-        #   - StandaloneLinux64 # Build a Linux 64-bit standalone.
-        #   - iOS # Build an iOS player.
-        #   - Android # Build an Android .apk standalone app.
-          - WebGL # WebGL.
+    steps:
+      - name: Check for Unity license
+        run: |
+          if [[ -z "${{ secrets.UNITY_LICENSE }}" && -z "${{ secrets.UNITY_EMAIL }}" && -z "${{ secrets.UNITY_PASSWORD }}" ]]; then
+            echo "::error::Unity license secrets are not set. Please set UNITY_LICENSE or both UNITY_EMAIL and UNITY_PASSWORD."
+            exit 1
+          fi
+          echo "✅ Unity secrets are properly configured"
+
+  # Run tests only if explicitly enabled
+  test:
+    name: Unity Tests
+    needs: [ verify-secrets ]
+    if: github.event.inputs.runTests == 'true'
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
           lfs: true
+
       - uses: actions/cache@v3
         with:
           path: Library
-          key: Library-${{ matrix.targetPlatform }}
+          key: Library-test
           restore-keys: Library-
-      - if: matrix.targetPlatform == 'Android'
-        uses: jlumbroso/free-disk-space@v1.3.1
-      - uses: game-ci/unity-builder@v4
+
+      - uses: game-ci/unity-test-runner@v4
+        id: tests
         env:
           UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
           UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
           UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
         with:
-          targetPlatform: ${{ matrix.targetPlatform }}
-      - uses: actions/upload-artifact@v3
+          testMode: all
+
+      - name: Upload Test Results
+        if: always()
+        uses: actions/upload-artifact@v4  # Explicitly v4
         with:
-          name: Build-${{ matrix.targetPlatform }}
-          path: build/${{ matrix.targetPlatform }}
+          name: Test-Results
+          path: artifacts/
+
+  # Build for Windows
+  build-windows:
+    name: Build Windows
+    needs: [ verify-secrets ]
+    # Only run if Windows build is enabled and tests pass (if tests are running)
+    if: (github.event.inputs.buildWindows == null || github.event.inputs.buildWindows == 'true') && (github.event.inputs.runTests != 'true' || needs.test.result == 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          lfs: true
+
+      - name: Cache Library folder
+        uses: actions/cache@v3
+        with:
+          path: Library
+          key: Library-Windows
+          restore-keys: Library-
+
+      - name: Build Windows
+        uses: game-ci/unity-builder@v4
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+        with:
+          targetPlatform: StandaloneWindows64
+
+      - name: Upload Windows Build
+        uses: actions/upload-artifact@v4  # Explicitly v4
+        with:
+          name: Build-Windows
+          path: build/StandaloneWindows64
+          retention-days: 3
+
+  # Build for WebGL
+  build-webgl:
+    name: Build WebGL
+    needs: [ verify-secrets ]
+    # Only run if WebGL build is enabled and tests pass (if tests are running)
+    if: (github.event.inputs.buildWebGL == null || github.event.inputs.buildWebGL == 'true') && (github.event.inputs.runTests != 'true' || needs.test.result == 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          lfs: true
+
+      - name: Cache Library folder
+        uses: actions/cache@v3
+        with:
+          path: Library
+          key: Library-WebGL
+          restore-keys: Library-
+
+      - name: Build WebGL
+        uses: game-ci/unity-builder@v4
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+        with:
+          targetPlatform: WebGL
+
+      - name: Upload WebGL Build
+        uses: actions/upload-artifact@v4  # Explicitly v4
+        with:
+          name: Build-WebGL
+          path: build/WebGL
+          retention-days: 3
+
+  # Deploy Windows build to a release
+#  deploy-windows:
+#    name: Deploy Windows to Release
+#    needs: build-windows
+#    if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+#    runs-on: ubuntu-latest
+#    permissions:
+#      contents: write
+#    steps:
+#      - name: Checkout Repository
+#        uses: actions/checkout@v4
+#
+#      - name: Download Windows Build
+#        uses: actions/download-artifact@v4  # Explicitly v4
+#        with:
+#          name: Build-Windows
+#          path: windows-build
+#
+#      - name: Zip Windows Build
+#        run: |
+#          cd windows-build
+#          zip -r ../DOTS-Horde-Architect-Windows.zip .
+#
+#      - name: Create Release
+#        id: create_release
+#        uses: softprops/action-gh-release@v1
+#        with:
+#          files: DOTS-Horde-Architect-Windows.zip
+#          name: Release ${{ github.run_number }} - Windows
+#          tag_name: v0.1.${{ github.run_number }}
+#          draft: false
+#          prerelease: false
+#          generate_release_notes: true
+
+  # Deploy WebGL build to GitHub Pages
+  deploy-webgl:
+    name: Deploy WebGL to GitHub Pages
+    needs: build-webgl
+    # Modified condition to include workflow_dispatch with deployWebGL input
+    if: >-
+      success() && 
+      (
+        (github.event_name == 'push' && github.ref == 'refs/heads/main') || 
+        (github.event_name == 'workflow_dispatch' && github.event.inputs.deployWebGL == 'true')
+      )
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Download WebGL Build
+        uses: actions/download-artifact@v4
+        with:
+          name: Build-WebGL
+          path: webgl-build
+
+      # Create index.html if it doesn't exist
+      - name: Ensure index.html exists
+        run: |
+          if [ ! -f webgl-build/index.html ]; then
+            echo "Creating a redirect index.html file"
+            # Find the actual HTML file (usually index.html in a subfolder)
+            MAIN_HTML=$(find webgl-build -name "*.html" | head -n 1)
+            if [ -n "$MAIN_HTML" ]; then
+              MAIN_HTML_RELATIVE=$(echo $MAIN_HTML | sed 's|webgl-build/||')
+              echo "<meta http-equiv=\"refresh\" content=\"0; url=./${MAIN_HTML_RELATIVE}\">" > webgl-build/index.html
+            else
+              echo "<h1>DOTS-Horde-Architect</h1><p>WebGL build coming soon.</p>" > webgl-build/index.html
+            fi
+          fi
+
+      # Setup Pages
+      - name: Setup Pages
+        uses: actions/configure-pages@v3
+
+      # Upload artifact
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v2
+        with:
+          path: 'webgl-build'
+
+      # Deploy to GitHub Pages
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v2
