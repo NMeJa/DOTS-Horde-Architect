@@ -42,7 +42,7 @@ jobs:
     name: Verify Unity Secrets
     runs-on: ubuntu-latest
     outputs:
-      buildWindows: ${{ steps.set-build-flags.outputs.buildWindows }}
+     # buildWindows: ${{ steps.set-build-flags.outputs.buildWindows }}
       buildWebGL: ${{ steps.set-build-flags.outputs.buildWebGL }}
     steps:
       - name: Check for Unity license
